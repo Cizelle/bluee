@@ -1,44 +1,291 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
-
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
+import React, {useEffect, useState, useCallback} from 'react';
 import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
+  PermissionsAndroid,
+  Platform,
+  Alert,
+} from 'react-native';
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+// --- Import the libraries we installed ---
+import Geolocation from 'react-native-geolocation-service';
+import DeviceInfo from 'react-native-device-info';
+import {
+  getBatteryLevel,
+  isCharging,
+} from 'react-native-device-battery';
+import {getCommunicationService} from './CommunicationService';
 
+// --- Import our new files ---
+import {RealmContext, DisasterData} from './realm';
+import Realm from 'realm';
+
+// Extract the Realm hooks for use in a child component
+const {RealmProvider, useRealm, useQuery} = RealmContext;
+
+// --- Define Types for our State Variables ---
+interface GpsLocation {
+  latitude: number;
+  longitude: number;
+}
+
+interface BatteryStatus {
+  level: string;
+  state: 'full' | 'charging' | 'unplugged';
+}
+
+// This component contains the core app logic and will be wrapped by the RealmProvider
+const AppContent = () => {
+  const [gpsLocation, setGpsLocation] = useState<GpsLocation | null>(null);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [batteryStatus, setBatteryStatus] = useState<BatteryStatus | null>(null);
+  const [permissionGranted, setPermissionGranted] = useState<boolean>(false);
+  const [statusMessage, setStatusMessage] = useState<string>('Awaiting data...');
+  const [isServiceRunning, setIsServiceRunning] = useState(false);
+
+  const realm = useRealm();
+  const storedData = useQuery<DisasterData>('DisasterData');
+  const comms = getCommunicationService(realm);
+
+  // --- 1. Handle Permissions First ---
+  const requestLocationPermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          {
+            title: 'Location Access Required',
+            message: 'This app needs to access your location for disaster management.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          },
+        );
+        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+          console.log('Location permission granted');
+          setPermissionGranted(true);
+        } else {
+          console.log('Location permission denied');
+          setPermissionGranted(false);
+          Alert.alert(
+            'Permission Denied',
+            'Location access is required to use this app.',
+          );
+        }
+      } catch (err) {
+        console.warn(err);
+      }
+    } else {
+      setPermissionGranted(true);
+    }
+  };
+
+  // --- 2. Data Retrieval Functions ---
+  // Wrapped in useCallback to prevent re-creation on every render
+  const getDeviceLocation = useCallback(() => {
+    if (!permissionGranted) {
+      setStatusMessage('Location permission not granted. Cannot retrieve GPS.');
+      return;
+    }
+    Geolocation.watchPosition(
+      position => {
+        const {latitude, longitude} = position.coords;
+        setGpsLocation({latitude, longitude});
+        console.log('New GPS Location:', {latitude, longitude});
+        setStatusMessage('GPS Location received.');
+      },
+      error => {
+        console.log(error.code, error.message);
+        setStatusMessage('Error getting GPS location.');
+      },
+    );
+  }, [permissionGranted]);
+
+  const getDeviceId = async () => {
+    const uniqueId = await DeviceInfo.getUniqueId();
+    setDeviceId(uniqueId);
+    console.log('Device ID:', uniqueId);
+  };
+
+  const getDeviceBattery = async () => {
+    try {
+      const level = await getBatteryLevel();
+      const charging = await isCharging();
+      const state = charging ? 'charging' : 'unplugged';
+      setBatteryStatus({
+        level: `${(level * 100).toFixed(0)}%`,
+        state: state as 'full' | 'charging' | 'unplugged',
+      });
+      console.log('Battery Status:', {level, state});
+    } catch (error) {
+      console.error('Error getting battery status:', error);
+      setStatusMessage('Error getting battery status.');
+    }
+  };
+
+  // Wrapped in useCallback to prevent re-creation on every render
+  const startCommsService = useCallback(() => {
+    if (!gpsLocation || !deviceId || !batteryStatus) {
+      setStatusMessage('Waiting for all device data to be available...');
+      return;
+    }
+
+    const collectedData = {
+      _id: new Realm.BSON.ObjectId(),
+      deviceId: deviceId,
+      latitude: gpsLocation.latitude,
+      longitude: gpsLocation.longitude,
+      batteryLevel: batteryStatus.level,
+      batteryState: batteryStatus.state,
+      timestamp: new Date(),
+    };
+    
+    comms.updateDeviceData(collectedData as DisasterData);
+    comms.startBackgroundCommunication(realm);
+    setIsServiceRunning(true);
+    setStatusMessage('Background communication service started.');
+  }, [gpsLocation, deviceId, batteryStatus, comms, realm]);
+
+  // --- 3. Use Effect Hooks to Run Functions on App Load and Data Changes ---
+  useEffect(() => {
+    requestLocationPermission();
+    getDeviceId();
+    getDeviceBattery();
+
+    const dataInterval = setInterval(() => {
+      getDeviceBattery();
+      getDeviceId();
+    }, 60000);
+
+    return () => clearInterval(dataInterval);
+  }, []);
+
+  useEffect(() => {
+    if (gpsLocation && deviceId && batteryStatus && !isServiceRunning) {
+      startCommsService();
+    }
+  }, [gpsLocation, deviceId, batteryStatus, isServiceRunning, startCommsService]);
+  
+  useEffect(() => {
+    if (permissionGranted) {
+      getDeviceLocation();
+    }
+  }, [permissionGranted, getDeviceLocation]);
+
+  // --- 4. The UI ---
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Disaster Management App</Text>
+        <Text style={styles.subtitle}>{statusMessage}</Text>
+      </View>
+
+      <View style={styles.dataContainer}>
+        <View style={styles.dataCard}>
+          <Text style={styles.cardTitle}>GPS Location</Text>
+          {gpsLocation ? (
+            <>
+              <Text style={styles.dataText}>Latitude: {gpsLocation.latitude.toFixed(6)}</Text>
+              <Text style={styles.dataText}>Longitude: {gpsLocation.longitude.toFixed(6)}</Text>
+            </>
+          ) : (
+            <Text style={styles.dataText}>Retrieving location...</Text>
+          )}
+        </View>
+
+        <View style={styles.dataCard}>
+          <Text style={styles.cardTitle}>Device ID</Text>
+          <Text style={styles.dataText}>{deviceId || 'Retrieving...'}</Text>
+        </View>
+
+        <View style={styles.dataCard}>
+          <Text style={styles.cardTitle}>Battery Status</Text>
+          {batteryStatus ? (
+            <>
+              <Text style={styles.dataText}>Level: {batteryStatus.level}</Text>
+              <Text style={styles.dataText}>State: {batteryStatus.state}</Text>
+            </>
+          ) : (
+            <Text style={styles.dataText}>Retrieving...</Text>
+          )}
+        </View>
+
+        {/* New section to display stored data */}
+        <View style={styles.dataCard}>
+          <Text style={styles.cardTitle}>Received Data ({storedData.length})</Text>
+          <Text style={styles.dataText}>Last received record:</Text>
+          {storedData.length > 0 ? (
+            <Text style={styles.dataText}>
+              ID: {storedData[storedData.length - 1].deviceId.substring(0, 10)}...
+              <br />
+              Lat: {storedData[storedData.length - 1].latitude.toFixed(4)}
+            </Text>
+          ) : (
+            <Text style={styles.dataText}>No data received yet.</Text>
+          )}
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+};
+
+
+// The main App component that provides the Realm context
+const App = () => {
+  return (
+    <RealmProvider>
       <AppContent />
-    </SafeAreaProvider>
+    </RealmProvider>
   );
-}
+};
 
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
-  );
-}
-
+// --- 5. Styles ---
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#f0f2f5',
+  },
+  header: {
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#007bff',
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#d4e3ff',
+    marginTop: 5,
+  },
+  dataContainer: {
+    flex: 1,
+    padding: 10,
+  },
+  dataCard: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 15,
+    marginVertical: 8,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 5,
+    color: '#333',
+  },
+  dataText: {
+    fontSize: 16,
+    color: '#555',
   },
 });
 
