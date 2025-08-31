@@ -36,7 +36,6 @@ interface BatteryStatus {
   state: 'full' | 'charging' | 'unplugged';
 }
 
-// This component contains the core app logic and will be wrapped by the RealmProvider
 const AppContent = () => {
   const [gpsLocation, setGpsLocation] = useState<GpsLocation | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
@@ -49,30 +48,28 @@ const AppContent = () => {
   const storedData = useQuery<DisasterData>('DisasterData');
   const comms = getCommunicationService(realm);
 
-  // --- 1. Handle Permissions First ---
-  const requestLocationPermission = async () => {
+  // In your App.js, modify the requestLocationPermission function
+const requestLocationPermission = async () => {
     if (Platform.OS === 'android') {
       try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          {
-            title: 'Location Access Required',
-            message: 'This app needs to access your location for disaster management.',
-            buttonNeutral: 'Ask Me Later',
-            buttonNegative: 'Cancel',
-            buttonPositive: 'OK',
-          },
-        );
-        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-          console.log('Location permission granted');
-          setPermissionGranted(true);
+        const granted = await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        ]);
+
+        if (granted['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED &&
+            granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
+            granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED) {
+            console.log('All permissions granted');
+            setPermissionGranted(true);
         } else {
-          console.log('Location permission denied');
-          setPermissionGranted(false);
-          Alert.alert(
-            'Permission Denied',
-            'Location access is required to use this app.',
-          );
+            console.log('One or more permissions denied');
+            setPermissionGranted(false);
+            Alert.alert(
+                'Permission Denied',
+                'Location and Bluetooth permissions are required to use this app.',
+            );
         }
       } catch (err) {
         console.warn(err);
@@ -80,10 +77,8 @@ const AppContent = () => {
     } else {
       setPermissionGranted(true);
     }
-  };
+};
 
-  // --- 2. Data Retrieval Functions ---
-  // Wrapped in useCallback to prevent re-creation on every render
   const getDeviceLocation = useCallback(() => {
     if (!permissionGranted) {
       setStatusMessage('Location permission not granted. Cannot retrieve GPS.');
@@ -100,6 +95,8 @@ const AppContent = () => {
         console.log(error.code, error.message);
         setStatusMessage('Error getting GPS location.');
       },
+      // Fixed: Removed 'maximumAge'
+      {enableHighAccuracy: true},
     );
   }, [permissionGranted]);
 
@@ -109,23 +106,29 @@ const AppContent = () => {
     console.log('Device ID:', uniqueId);
   };
 
-  const getDeviceBattery = async () => {
-    try {
-      const level = await getBatteryLevel();
-      const charging = await isCharging();
-      const state = charging ? 'charging' : 'unplugged';
-      setBatteryStatus({
-        level: `${(level * 100).toFixed(0)}%`,
-        state: state as 'full' | 'charging' | 'unplugged',
-      });
-      console.log('Battery Status:', {level, state});
-    } catch (error) {
-      console.error('Error getting battery status:', error);
-      setStatusMessage('Error getting battery status.');
-    }
-  };
+ const getDeviceBattery = () => {
+  try {
+    const dummyLevel = 0.30; // 30%
+    const dummyCharging = false;
 
-  // Wrapped in useCallback to prevent re-creation on every render
+    const state = dummyCharging ? 'charging' : 'unplugged';
+
+    setBatteryStatus({  
+      level: `${(dummyLevel * 100).toFixed(0)}%`,
+      state: state as 'full' | 'charging' | 'unplugged',
+    });
+
+    console.log('Using dummy Battery Status:', {
+      level: dummyLevel,
+      state: state,
+    });
+  } catch (error) {
+    // This catch block won't be hit with the dummy data, but it's good practice to keep.
+    console.error('Error getting dummy battery status:', error);
+    setStatusMessage('Error getting dummy battery status.');
+  }
+};
+
   const startCommsService = useCallback(() => {
     if (!gpsLocation || !deviceId || !batteryStatus) {
       setStatusMessage('Waiting for all device data to be available...');
@@ -148,7 +151,6 @@ const AppContent = () => {
     setStatusMessage('Background communication service started.');
   }, [gpsLocation, deviceId, batteryStatus, comms, realm]);
 
-  // --- 3. Use Effect Hooks to Run Functions on App Load and Data Changes ---
   useEffect(() => {
     requestLocationPermission();
     getDeviceId();
@@ -174,7 +176,6 @@ const AppContent = () => {
     }
   }, [permissionGranted, getDeviceLocation]);
 
-  // --- 4. The UI ---
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -212,7 +213,6 @@ const AppContent = () => {
           )}
         </View>
 
-        {/* New section to display stored data */}
         <View style={styles.dataCard}>
           <Text style={styles.cardTitle}>Received Data ({storedData.length})</Text>
           <Text style={styles.dataText}>Last received record:</Text>
@@ -232,7 +232,6 @@ const AppContent = () => {
 };
 
 
-// The main App component that provides the Realm context
 const App = () => {
   return (
     <RealmProvider>
@@ -241,7 +240,6 @@ const App = () => {
   );
 };
 
-// --- 5. Styles ---
 const styles = StyleSheet.create({
   container: {
     flex: 1,

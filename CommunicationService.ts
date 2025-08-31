@@ -67,7 +67,7 @@ class CommunicationService {
     const backgroundTask = async (taskData: any) => {
       setInterval(() => {
         console.log('Running gossip loop...');
-        this.startBleCommunication();
+        this.checkAndStartBleScan(); // Call the new, safer method
         this.startBeaconCommunication();
       }, 10000);
 
@@ -82,14 +82,17 @@ class CommunicationService {
   public stopBackgroundCommunication() {
     console.log('Stopping background communication service.');
     BackgroundJob.stop();
-    if (this.isScanning) {
-      this.manager.stopDeviceScan();
-      this.isScanning = false;
+
+    if (this.manager) {
+      if (this.isScanning) {
+        this.manager.stopDeviceScan();
+        this.isScanning = false;
+      }
     }
+
     Beacons.stopRangingBeaconsInRegion(REGION_ID, BEACON_UUID);
   }
 
-  // --- Communication Ladder: Beacon ---
   private async startBeaconCommunication() {
     try {
       if (Platform.OS === 'android') {
@@ -111,56 +114,50 @@ class CommunicationService {
 
       Beacons.startRangingBeaconsInRegion(REGION_ID, BEACON_UUID);
 
-      // Use native event emitter for beacon events
       beaconsEmitter.addListener('beaconsDidRange', (data: any) => {
         console.log('Beacons found:', data.beacons);
       });
-
-      // Note: startAdvertisingBeacon requires native setup or a different package
-      // Here comment or remove until implemented with proper setup
-      /*
-      if (Platform.OS === 'android' && this.deviceData) {
-        Beacons.startAdvertisingBeacon(
-          BEACON_UUID,
-          this.deviceData.deviceId,
-          1,
-          1,
-          0,
-          0,
-        );
-      }
-      */
     } catch (error) {
       console.error('Error with Beacon communication:', error);
     }
   }
 
-  // --- Communication Ladder: BLE ---
-  private startBleCommunication() {
-    if (this.isScanning) {
-      return;
+  // --- New, safer method to check and start BLE scan ---
+  private async checkAndStartBleScan() {
+    try {
+      const state = await this.manager.state();
+      if (state !== 'PoweredOn') {
+        console.warn('Bluetooth is not powered on. Cannot start scan.');
+        return;
+      }
+
+      if (this.isScanning) {
+        return;
+      }
+
+      this.isScanning = true;
+      
+      this.manager.startDeviceScan(
+        [SERVICE_UUID],
+        { allowDuplicates: false },
+        (error, device) => {
+          if (error) {
+            console.error('BLE Scan error:', error.message);
+            this.isScanning = false;
+            return;
+          }
+          
+          if (device && device.name) {
+            console.log(`Found BLE device: ${device.name}`);
+            this.manager.stopDeviceScan();
+            this.isScanning = false;
+            this.connectToDevice(device);
+          }
+        },
+      );
+    } catch (error) {
+      console.error('Error checking Bluetooth state:', error);
     }
-    this.isScanning = true;
-
-    this.manager.startDeviceScan(
-      [SERVICE_UUID],
-      { allowDuplicates: false },
-      (error, device) => {
-        if (error) {
-          console.error('BLE Scan error:', error);
-          this.isScanning = false;
-          return;
-        }
-        if (device && device.name) {
-          console.log(`Found BLE device: ${device.name}`);
-
-          this.manager.stopDeviceScan();
-          this.isScanning = false;
-
-          this.connectToDevice(device);
-        }
-      },
-    );
   }
 
   private async connectToDevice(device: Device) {
@@ -169,7 +166,6 @@ class CommunicationService {
       const connectedDevice = await device.connect();
       await connectedDevice.discoverAllServicesAndCharacteristics();
 
-      // Gossip Protocol Step 1 - Exchange Data Summaries
       const localDataSummary = this.generateDataSummary();
       const localSummaryBase64 = Buffer.from(JSON.stringify(localDataSummary)).toString('base64');
 
@@ -186,7 +182,6 @@ class CommunicationService {
       const remoteDataSummary = JSON.parse(Buffer.from(remoteDataSummaryBase64, 'base64').toString('utf8'));
       console.log('Received remote data summary:', remoteDataSummary);
 
-      // Gossip Protocol Step 2 - Request/Send Missing Data
       const myMissingRecordsToSend = this.getMissingDataFromRemote(remoteDataSummary);
       if (myMissingRecordsToSend.length > 0) {
         console.log(`Sending ${myMissingRecordsToSend.length} records to remote device.`);
@@ -218,7 +213,7 @@ class CommunicationService {
       await device.cancelConnection();
       console.log('Disconnected from device. Restarting scan.');
       this.isScanning = false;
-      this.startBleCommunication();
+      this.checkAndStartBleScan();
     }
   }
 
@@ -234,7 +229,6 @@ class CommunicationService {
     });
   }
 
-  // --- Gossip Protocol Helpers ---
   private generateDataSummary() {
     const data = this.localRealm!.objects<DisasterData>('DisasterData');
     const summary: Record<string, { timestamp: Date }> = {};
