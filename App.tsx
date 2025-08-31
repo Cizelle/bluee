@@ -42,11 +42,10 @@ const AppContent = () => {
   const [batteryStatus, setBatteryStatus] = useState<BatteryStatus | null>(null);
   const [permissionGranted, setPermissionGranted] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>('Awaiting data...');
-  const [isServiceRunning, setIsServiceRunning] = useState(false);
 
   const realm = useRealm();
   const storedData = useQuery<DisasterData>('DisasterData');
-  const comms = getCommunicationService(realm);
+  const comms = getCommunicationService();
 
   // In your App.js, modify the requestLocationPermission function
 const requestLocationPermission = async () => {
@@ -95,7 +94,6 @@ const requestLocationPermission = async () => {
         console.log(error.code, error.message);
         setStatusMessage('Error getting GPS location.');
       },
-      // Fixed: Removed 'maximumAge'
       {enableHighAccuracy: true},
     );
   }, [permissionGranted]);
@@ -106,14 +104,14 @@ const requestLocationPermission = async () => {
     console.log('Device ID:', uniqueId);
   };
 
- const getDeviceBattery = () => {
+const getDeviceBattery = () => {
   try {
     const dummyLevel = 0.30; // 30%
     const dummyCharging = false;
 
     const state = dummyCharging ? 'charging' : 'unplugged';
 
-    setBatteryStatus({  
+    setBatteryStatus({ 
       level: `${(dummyLevel * 100).toFixed(0)}%`,
       state: state as 'full' | 'charging' | 'unplugged',
     });
@@ -123,7 +121,6 @@ const requestLocationPermission = async () => {
       state: state,
     });
   } catch (error) {
-    // This catch block won't be hit with the dummy data, but it's good practice to keep.
     console.error('Error getting dummy battery status:', error);
     setStatusMessage('Error getting dummy battery status.');
   }
@@ -146,9 +143,9 @@ const requestLocationPermission = async () => {
     };
     
     comms.updateDeviceData(collectedData as DisasterData);
-    comms.startBackgroundCommunication(realm);
-    setIsServiceRunning(true);
-    setStatusMessage('Background communication service started.');
+    // Call the new, simplified communication function
+    comms.startCommunication(realm); 
+    setStatusMessage('Bluetooth communication started.');
   }, [gpsLocation, deviceId, batteryStatus, comms, realm]);
 
   useEffect(() => {
@@ -165,10 +162,10 @@ const requestLocationPermission = async () => {
   }, []);
 
   useEffect(() => {
-    if (gpsLocation && deviceId && batteryStatus && !isServiceRunning) {
+    if (gpsLocation && deviceId && batteryStatus) {
       startCommsService();
     }
-  }, [gpsLocation, deviceId, batteryStatus, isServiceRunning, startCommsService]);
+  }, [gpsLocation, deviceId, batteryStatus, startCommsService]);
   
   useEffect(() => {
     if (permissionGranted) {
@@ -216,18 +213,18 @@ const requestLocationPermission = async () => {
         <View style={styles.dataCard}>
           <Text style={styles.cardTitle}>Received Data ({storedData.length})</Text>
           <Text style={styles.dataText}>Last received record:</Text>
-         {storedData.length > 0 ? (
-  <>
-    <Text style={styles.dataText}>
-      ID: {storedData[storedData.length - 1].deviceId.substring(0, 10)}...
-    </Text>
-    <Text style={styles.dataText}>
-      Lat: {storedData[storedData.length - 1].latitude.toFixed(4)}
-    </Text>
-  </>
-) : (
-  <Text style={styles.dataText}>No data received yet.</Text>
-)}
+          {storedData.length > 0 ? (
+            <>
+              <Text style={styles.dataText}>
+                ID: {storedData[storedData.length - 1].deviceId.substring(0, 10)}...
+              </Text>
+              <Text style={styles.dataText}>
+                Lat: {storedData[storedData.length - 1].latitude.toFixed(4)}
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.dataText}>No data received yet.</Text>
+          )}
         </View>
       </View>
     </SafeAreaView>
