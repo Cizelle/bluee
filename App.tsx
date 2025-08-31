@@ -216,15 +216,18 @@ const requestLocationPermission = async () => {
         <View style={styles.dataCard}>
           <Text style={styles.cardTitle}>Received Data ({storedData.length})</Text>
           <Text style={styles.dataText}>Last received record:</Text>
-          {storedData.length > 0 ? (
-            <Text style={styles.dataText}>
-              ID: {storedData[storedData.length - 1].deviceId.substring(0, 10)}...
-              <br />
-              Lat: {storedData[storedData.length - 1].latitude.toFixed(4)}
-            </Text>
-          ) : (
-            <Text style={styles.dataText}>No data received yet.</Text>
-          )}
+         {storedData.length > 0 ? (
+  <>
+    <Text style={styles.dataText}>
+      ID: {storedData[storedData.length - 1].deviceId.substring(0, 10)}...
+    </Text>
+    <Text style={styles.dataText}>
+      Lat: {storedData[storedData.length - 1].latitude.toFixed(4)}
+    </Text>
+  </>
+) : (
+  <Text style={styles.dataText}>No data received yet.</Text>
+)}
         </View>
       </View>
     </SafeAreaView>
